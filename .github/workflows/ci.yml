@@ -1,0 +1,56 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  build-test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: PHP syntax check
+        run: |
+          find src -name "*.php" -print0 | xargs -0 -n1 php -l
+
+      - name: Build Docker image
+        run: docker build -t ipchecker-totalips:ci .
+
+      - name: Run container
+        run: docker run -d --name ipchecker-totalips -p 8080:80 ipchecker-totalips:ci
+
+      - name: Wait for service
+        run: |
+          for i in {1..10}; do
+            if curl -s -o /dev/null http://localhost:8080/; then
+              exit 0
+            fi
+            sleep 1
+          done
+          echo "Service did not start in time" >&2
+          exit 1
+
+      - name: Basic functional checks
+        run: |
+          status_root=$(curl -s -o /tmp/root_resp -w "%{http_code}" http://localhost:8080/)
+          echo "Root status: $status_root"
+          test "$status_root" = "400"
+
+          status_items=$(curl -s -o /tmp/items_resp -w "%{http_code}" "http://localhost:8080/?items=1.2.3.4,5.6.7.8")
+          echo "Items status: $status_items"
+          test "$status_items" = "200"
+
+      - name: Show responses on failure
+        if: failure()
+        run: |
+          echo "Root response:"
+          cat /tmp/root_resp || true
+          echo ""
+          echo "Items response:"
+          cat /tmp/items_resp || true
+
+      - name: Cleanup
+        if: always()
+        run: docker rm -f ipchecker-totalips || true
